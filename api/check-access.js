@@ -4,3 +4,5 @@ export default async function handler(req, res) {
     key: process.env.SUPABASE_SERVICE_KEY ? "ok" : "missing"
   });
 }
+
+// teste
