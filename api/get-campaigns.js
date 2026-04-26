@@ -1,47 +1,61 @@
 import fetch from "node-fetch";
 
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
-const AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID;
 
-// 🔥 Mapeamento correto por objetivo
+// Objetivos atualizados para API v19+
 const metricMap = {
   OUTCOME_SALES: "purchase",
+  OUTCOME_LEADS: "lead",
   LEAD_GENERATION: "lead",
-  LINK_CLICKS: "link_clicks",
+  OUTCOME_TRAFFIC: "link_click",
+  LINK_CLICKS: "link_click",
+  OUTCOME_ENGAGEMENT: "post_engagement",
   POST_ENGAGEMENT: "post_engagement",
-  MESSAGES: "onsite_conversion.messaging_conversation_started",
-  REACH: "reach"
+  OUTCOME_AWARENESS: "reach",
+  REACH: "reach",
+  OUTCOME_APP_PROMOTION: "app_install",
+  // Mensagens/WhatsApp
+  MESSAGES: "onsite_conversion.messaging_conversation_started_7d",
 };
 
-// 🔥 Função que corrige os dados
 function getCorrectMetric(objective, insights) {
   const metric = metricMap[objective];
+  if (!insights || !metric) return 0;
 
-  if (!insights) return 0;
+  // Métricas diretas (não ficam em actions[])
+  const directMetrics = ["reach", "impressions", "link_click"];
+  if (directMetrics.includes(metric)) {
+    return Number(insights[metric]) || 0;
+  }
 
-  // Caso venha via actions (compras, leads, etc)
-  if (insights.actions) {
-    const action = insights.actions.find(a => a.action_type === metric);
+  // Métricas que ficam dentro de actions[]
+  if (insights.actions && Array.isArray(insights.actions)) {
+    const action = insights.actions.find((a) => a.action_type === metric);
     return action ? Number(action.value) : 0;
   }
 
-  // Caso seja métrica direta (cliques, alcance)
-  return Number(insights[metric]) || 0;
+  return 0;
 }
 
 export default async function handler(req, res) {
   try {
-    // 🔥 Você pode alterar o período aqui
+    // Pega a conta do query param, não do .env fixo
+    const adAccountId = req.query.account_id;
     const timeRange = req.query.days || "7";
 
-    const url = `https://graph.facebook.com/v19.0/${AD_ACCOUNT_ID}/campaigns?fields=name,objective,insights.time_range({since:${getDate(
-      timeRange
-    )},until:${getToday()}}){impressions,reach,clicks,ctr,cpc,cpm,actions}&limit=50`;
+    if (!adAccountId) {
+      return res.status(400).json({ error: "account_id é obrigatório" });
+    }
+
+    const since = getDate(timeRange);
+    const until = getToday();
+
+    const url = `https://graph.facebook.com/v19.0/${adAccountId}/campaigns?fields=name,objective,status,insights.time_range({"since":"${since}","until":"${until}"}){impressions,reach,clicks,ctr,cpc,cpm,spend,actions}&limit=50`;
 
     const response = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${ACCESS_TOKEN}`
-      }
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
+      },
     });
 
     const json = await response.json();
@@ -50,36 +64,39 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: json });
     }
 
-    const campaigns = json.data.map(campaign => {
-      const insights = campaign.insights?.data?.[0] || {};
+    const campaigns = json.data.map((campaign) => {
+      const insights = campaign.insights?.data?.[0] || null;
 
       return {
+        account_id: adAccountId,
+        campaign_id: campaign.id,
         name: campaign.name,
         objective: campaign.objective,
+        status: campaign.status,
         result: getCorrectMetric(campaign.objective, insights),
-        ctr: Number(insights.ctr) || 0,
-        cpc: Number(insights.cpc) || 0,
-        cpm: Number(insights.cpm) || 0,
-        impressions: Number(insights.impressions) || 0
+        spend: Number(insights?.spend) || 0,
+        ctr: Number(insights?.ctr) || 0,
+        cpc: Number(insights?.cpc) || 0,
+        cpm: Number(insights?.cpm) || 0,
+        impressions: Number(insights?.impressions) || 0,
+        reach: Number(insights?.reach) || 0,
+        period_days: Number(timeRange),
+        fetched_at: new Date().toISOString(),
       };
     });
 
     return res.json(campaigns);
-
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 }
 
-// 🔥 Função data início
 function getDate(days) {
   const d = new Date();
   d.setDate(d.getDate() - Number(days));
   return d.toISOString().split("T")[0];
 }
 
-// 🔥 Função hoje
 function getToday() {
-  const d = new Date();
-  return d.toISOString().split("T")[0];
+  return new Date().toISOString().split("T")[0];
 }
